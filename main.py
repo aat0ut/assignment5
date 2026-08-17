@@ -4,6 +4,8 @@ from typing import Optional
 import db
 import auth
 from pydantic import BaseModel
+import os
+from src.llm.schema import TriageInput, TriageOutput
 
 class AuthRequest(BaseModel):
     email: str
@@ -62,6 +64,12 @@ def signup(creds: AuthRequest):
         return result.user
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/triage", response_model=TriageOutput)
+def triage(payload: TriageInput):
+    if os.environ.get("LLM_STUB") == "1":
+        return TriageOutput(category="other", urgency="low", confidence=0.42)
+    raise HTTPException(status_code=501, detail="Real model call not implemented yet (Stage 2)")
 
 @app.post("/auth/login")
 def login(creds: AuthRequest):
