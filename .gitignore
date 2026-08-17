@@ -1,0 +1,25 @@
+cat > .gitignore << 'EOF'
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# uv
+.venv/
+uv.lock
+
+# Editors
+.vscode/
+.idea/
+.DS_Store
+
+# Docker
+*.log
+EOF
