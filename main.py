@@ -9,13 +9,76 @@ from src.llm.schema import TriageInput, TriageOutput
 from openai import OpenAI
 import json
 import logging
+import time
+import random
+import logging
 
 os.makedirs("logs", exist_ok=True)
 
 llm_client = OpenAI(
     base_url=os.environ["LLM_BASE_URL"],
     api_key=os.environ["LLM_API_KEY"],
+    timeout=30.0,
+    max_retries=0, 
 )
+
+logging.basicConfig(level=logging.INFO)
+cost_logger = logging.getLogger("llm_cost")
+
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+def call_model(user_text: str, repair_context: str = None):
+    messages = [
+        {"role": "system", "content": TRIAGE_PROMPT},
+        {"role": "user", "content": user_text},
+    ]
+    if repair_context:
+        messages.append({"role": "assistant", "content": repair_context})
+        messages.append({"role": "user", "content": "Your previous answer was rejected. Return only corrected JSON matching the schema."})
+
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        start = time.monotonic()
+        try:
+            response = llm_client.chat.completions.create(
+                model=os.environ["LLM_MODEL"],
+                temperature=0.2,
+                messages=messages,
+            )
+            duration_ms = int((time.monotonic() - start) * 1000)
+            usage = response.usage
+            cost_logger.info(json.dumps({
+                "prompt_version": "triage-v1",
+                "model": os.environ["LLM_MODEL"],
+                "input_tokens": usage.prompt_tokens if usage else None,
+                "output_tokens": usage.completion_tokens if usage else None,
+                "duration_ms": duration_ms,
+                "attempt": attempt,
+                "repair": repair_context is not None,
+            }))
+            return response.choices[0].message.content
+
+        except Exception as e:
+            status_code = getattr(e, "status_code", None)
+            if status_code in RETRYABLE_STATUS and attempt < max_attempts:
+                wait = (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+                time.sleep(wait)
+                continue
+            elif status_code == 504 or "timeout" in str(e).lower():
+                raise HTTPException(status_code=504, detail="Model call timed out")
+            else:
+                raise HTTPException(status_code=502, detail=f"Model call failed: {str(e)}")
+
+        except Exception as e:
+            status_code = getattr(e, "status_code", None)
+            if status_code in RETRYABLE_STATUS and attempt < max_attempts:
+                wait = (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+                time.sleep(wait)
+                continue
+            elif status_code == 504 or "timeout" in str(e).lower():
+                raise HTTPException(status_code=504, detail="Model call timed out")
+            else:
+                raise HTTPException(status_code=502, detail=f"Model call failed: {str(e)}")
 
 with open("prompts/triage-v1.md") as f:
     TRIAGE_PROMPT = f.read()
@@ -32,21 +95,6 @@ def extract_json(text: str) -> str:
     if start == -1 or end == -1:
         raise ValueError("No JSON object found in model output")
     return text[start:end + 1]
-
-def call_model(user_text: str, repair_context: str = None):
-    messages = [
-        {"role": "system", "content": TRIAGE_PROMPT},
-        {"role": "user", "content": user_text},
-    ]
-    if repair_context:
-        messages.append({"role": "assistant", "content": repair_context})
-        messages.append({"role": "user", "content": "Your previous answer was rejected. Return only corrected JSON matching the schema."})
-    response = llm_client.chat.completions.create(
-        model=os.environ["LLM_MODEL"],
-        temperature=0.2,
-        messages=messages,
-    )
-    return response.choices[0].message.content
 
 def quarantine(input_text: str, raw_output: str, error: str):
     with open("logs/quarantine.jsonl", "a") as f:
@@ -117,6 +165,9 @@ def signup(creds: AuthRequest):
 
 @app.post("/triage", response_model=TriageOutput)
 def triage(payload: TriageInput):
+    if os.environ.get("LLM_ENABLED", "true").lower() == "false":
+        return TriageOutput(category="other", urgency="low", confidence=0.0)
+
     if os.environ.get("LLM_STUB") == "1":
         return TriageOutput(category="other", urgency="low", confidence=0.42)
 
