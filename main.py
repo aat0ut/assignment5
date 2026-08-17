@@ -6,6 +6,15 @@ import auth
 from pydantic import BaseModel
 import os
 from src.llm.schema import TriageInput, TriageOutput
+from openai import OpenAI
+
+llm_client = OpenAI(
+    base_url=os.environ["LLM_BASE_URL"],
+    api_key=os.environ["LLM_API_KEY"],
+)
+
+with open("prompts/triage-v1.md") as f:
+    TRIAGE_PROMPT = f.read()
 
 class AuthRequest(BaseModel):
     email: str
@@ -65,12 +74,23 @@ def signup(creds: AuthRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/triage", response_model=TriageOutput)
+@app.post("/triage")
 def triage(payload: TriageInput):
     if os.environ.get("LLM_STUB") == "1":
         return TriageOutput(category="other", urgency="low", confidence=0.42)
-    raise HTTPException(status_code=501, detail="Real model call not implemented yet (Stage 2)")
 
+    response = llm_client.chat.completions.create(
+        model=os.environ["LLM_MODEL"],
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": TRIAGE_PROMPT},
+            {"role": "user", "content": payload.text},
+        ],
+    )
+    raw_text = response.choices[0].message.content
+    print("RAW MODEL OUTPUT:", raw_text)
+    return {"raw": raw_text}
+    
 @app.post("/auth/login")
 def login(creds: AuthRequest):
     if not creds.email or not creds.password:
