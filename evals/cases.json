@@ -1,0 +1,34 @@
+[
+  {
+    "input": "I was charged twice for my subscription this month, please refund one",
+    "expected_category": "billing"
+  },
+  {
+    "input": "The app crashes every time I try to export a PDF",
+    "expected_category": "bug"
+  },
+  {
+    "input": "Would be great if you added dark mode to the dashboard",
+    "expected_category": "feature"
+  },
+  {
+    "input": "hey",
+    "expected_category": "other"
+  },
+  {
+    "input": "My invoice from last week shows the wrong amount",
+    "expected_category": "billing"
+  },
+  {
+    "input": "Nothing happens when I click the save button",
+    "expected_category": "bug"
+  },
+  {
+    "input": "can you guys make it so we can export to excel too",
+    "expected_category": "feature"
+  },
+  {
+    "input": "not sure if this is the right place but my team lead mentioned something about pricing tiers changing? also is there a way to bulk export and can someone call me",
+    "expected_category": "other"
+  }
+]
