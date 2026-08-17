@@ -3,10 +3,14 @@ from typing_extensions import TypedDict
 from typing import Optional
 import db
 import auth
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 import os
 from src.llm.schema import TriageInput, TriageOutput
 from openai import OpenAI
+import json
+import logging
+
+os.makedirs("logs", exist_ok=True)
 
 llm_client = OpenAI(
     base_url=os.environ["LLM_BASE_URL"],
@@ -15,6 +19,43 @@ llm_client = OpenAI(
 
 with open("prompts/triage-v1.md") as f:
     TRIAGE_PROMPT = f.read()
+
+def extract_json(text: str) -> str:
+    """Strip code fences and surrounding text, return the JSON substring."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1:
+        raise ValueError("No JSON object found in model output")
+    return text[start:end + 1]
+
+def call_model(user_text: str, repair_context: str = None):
+    messages = [
+        {"role": "system", "content": TRIAGE_PROMPT},
+        {"role": "user", "content": user_text},
+    ]
+    if repair_context:
+        messages.append({"role": "assistant", "content": repair_context})
+        messages.append({"role": "user", "content": "Your previous answer was rejected. Return only corrected JSON matching the schema."})
+    response = llm_client.chat.completions.create(
+        model=os.environ["LLM_MODEL"],
+        temperature=0.2,
+        messages=messages,
+    )
+    return response.choices[0].message.content
+
+def quarantine(input_text: str, raw_output: str, error: str):
+    with open("logs/quarantine.jsonl", "a") as f:
+        f.write(json.dumps({
+            "input": input_text,
+            "raw_output": raw_output,
+            "error": error,
+            "prompt_version": "triage-v1"
+        }) + "\n")
 
 class AuthRequest(BaseModel):
     email: str
@@ -74,23 +115,26 @@ def signup(creds: AuthRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/triage")
+@app.post("/triage", response_model=TriageOutput)
 def triage(payload: TriageInput):
     if os.environ.get("LLM_STUB") == "1":
         return TriageOutput(category="other", urgency="low", confidence=0.42)
 
-    response = llm_client.chat.completions.create(
-        model=os.environ["LLM_MODEL"],
-        temperature=0.2,
-        messages=[
-            {"role": "system", "content": TRIAGE_PROMPT},
-            {"role": "user", "content": payload.text},
-        ],
-    )
-    raw_text = response.choices[0].message.content
-    print("RAW MODEL OUTPUT:", raw_text)
-    return {"raw": raw_text}
-    
+    raw_text = call_model(payload.text)
+
+    try:
+        json_str = extract_json(raw_text)
+        return TriageOutput.model_validate_json(json_str)
+    except (ValidationError, ValueError, json.JSONDecodeError) as first_error:
+        # repair retry — one shot only
+        repaired_raw = call_model(payload.text, repair_context=raw_text)
+        try:
+            json_str = extract_json(repaired_raw)
+            return TriageOutput.model_validate_json(json_str)
+        except (ValidationError, ValueError, json.JSONDecodeError) as second_error:
+            quarantine(payload.text, repaired_raw, str(second_error))
+            raise HTTPException(status_code=422, detail="Model could not produce a valid response")
+
 @app.post("/auth/login")
 def login(creds: AuthRequest):
     if not creds.email or not creds.password:

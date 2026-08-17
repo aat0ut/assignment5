@@ -1,0 +1,1 @@
+{"input": "hey", "raw_output": "{\"category\": \"other\", \"urgency\": \"low\", \"confidence\": 0.2}", "error": "1 validation error for TriageOutput\ncategory\n  Input should be 'billing', 'bug' or 'feature' [type=enum, input_value='other', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/enum", "prompt_version": "triage-v1"}
